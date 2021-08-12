@@ -67,7 +67,8 @@ def main():
     parser.add_argument("accession", help="NCBI Run accession")
     parser.add_argument("--outdir", required=True, help="Output folder")
     parser.add_argument("--tmpdir", default="/tmp", help="Directory of temp folder default: '/tmp'")
-    parser.add_argument("--gsize", default='', help="Estimated genome size(MB) eg. 3.2M. default: ''")
+    parser.add_argument("--gsize", default='',
+                        help="Estimated genome size(MB) eg. 3.2M, If blank will AUTODETECT. default: ''")
     parser.add_argument("--threads", default=8, type=int, help="Number of threads to use. default: 8")
     args = parser.parse_args()
 
