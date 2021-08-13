@@ -4,6 +4,8 @@ A simple bacterial genome assembly pipeline for Illumina paired-end reads from N
 ## Requirements
 * Python3.6+
 * [sra-tools](https://github.com/ncbi/sra-tools)
+  * fastq-dump
+  * sra-stat
 * [fastp](https://github.com/OpenGene/fastp)
 * [shovill](https://github.com/tseemann/shovill)
 
