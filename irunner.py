@@ -14,14 +14,14 @@ def run_cmd(cmd):
     return p
 
 
-def trimming(reads_1, reads_2, trim_1, trim_2, threads):
-    cmd = f"fastp -i {reads_1} -I {reads_2} -o {trim_1} -O {trim_2} --length_required 36 --cut_front 3 --cut_tail 3 " \
-          f"--thread {threads} --detect_adapter_for_pe -j /dev/null -h /dev/null"
+def trimming(reads_1, reads_2, trim_1, trim_2, threads, length=36, min_qual=3):
+    cmd = f"fastp -i {reads_1} -I {reads_2} -o {trim_1} -O {trim_2} --length_required {length} --cut_front {min_qual} " \
+          f"--cut_tail {min_qual} --thread {threads} --detect_adapter_for_pe -j /dev/null -h /dev/null"
     run_cmd(cmd)
 
 
 def download_and_dump_fastq(accession, outdir):
-    run_cmd(f"fastq-dump --split-e --outdir {outdir} {accession}")
+    run_cmd(f"fastq-dump --split-e --outdir --clip {outdir} {accession}")
 
 
 class SequenceReadArchive:
