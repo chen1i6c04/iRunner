@@ -1,45 +1,41 @@
 #!/usr/bin/env python3
 import os
-import re
 import sys
 import shutil
 import logging
 import argparse
 import xml.etree.cElementTree as ET
-from subprocess import run, PIPE, CalledProcessError
-
-
-def run_cmd(cmd):
-    p = run(cmd, stdout=PIPE, stderr=PIPE, shell=True, check=True)
-    return p
+from utils import ApplicationError, run_cmd
 
 
 def trimming(reads_1, reads_2, trim_1, trim_2, threads, length=36, min_qual=3):
-    cmd = f"fastp -i {reads_1} -I {reads_2} -o {trim_1} -O {trim_2} --length_required {length} --cut_front {min_qual} " \
-          f"--cut_tail {min_qual} --thread {threads} --detect_adapter_for_pe -j /dev/null -h /dev/null"
+    cmd = f"fastp -i {reads_1} -I {reads_2} -o {trim_1} -O {trim_2} --length_required {length} --cut_front {min_qual} "\
+          f"--cut_tail {min_qual} --thread {threads} --detect_adapter_for_pe -j /dev/null -h /dev/null -t 1"
     run_cmd(cmd)
 
 
-def download_and_dump_fastq(accession, outdir):
-    run_cmd(f"fastq-dump --split-e --outdir --clip {outdir} {accession}")
+def dump_fastq(sra_file, outdir):
+    run_cmd(f"fastq-dump --split-e --clip --outdir  {outdir} {sra_file}")
 
 
 class SequenceReadArchive:
-    def __init__(self, accession):
-        self._parse_accession(accession)
+    def __init__(self, sra_run):
+        self._check_input(sra_run)
         self._get_statistics()
 
-    def _parse_accession(self, accession):
-        if re.fullmatch('^[DES]RR[0-9]+$', accession):
-            self._run_accession = accession
+    def _check_input(self, infile):
+        with open(infile, 'rb') as handle:
+            head = next(handle)[:8].decode()
+        if head != 'NCBI.sra':
+            raise TypeError(f"{infile} is not sra file.")
         else:
-            raise ValueError(f"{accession} is not run accession")
+            self.run = infile
 
     def _get_statistics(self):
-        process = run_cmd(f'sra-stat -xse 2 {self._run_accession}')
-        self._stat_tree = ET.fromstring(process.stdout.decode())
+        stdout, stderr = run_cmd(f'sra-stat -xse 2 {self.run}')
+        self._stat_tree = ET.fromstring(stdout)
 
-    def count(self, min_score=0):
+    def count_bases(self, min_score=0):
         c = 0
         for quality in self._stat_tree.findall('*/Quality'):
             if int(quality.attrib['value']) >= min_score:
@@ -48,14 +44,11 @@ class SequenceReadArchive:
 
     @property
     def total_bases(self):
-        return self.count()
+        return self.count_bases()
 
     @property
     def layout(self):
         return self._stat_tree.find('Statistics').attrib['nreads']
-
-    def high_qulity_bases_percent(self, qscore=30):
-        return self.count(qscore) / self.count() * 100
 
     @property
     def length(self):
@@ -64,15 +57,18 @@ class SequenceReadArchive:
 
 def main():
     parser = argparse.ArgumentParser("NCBI SRA assembly pipeline.")
-    parser.add_argument("accession", help="NCBI Run accession")
+    parser.add_argument("sra", help="path of NCBI sra file")
     parser.add_argument("--outdir", required=True, help="Output folder")
     parser.add_argument("--tmpdir", default="/tmp", help="Directory of temp folder default: '/tmp'")
     parser.add_argument("--gsize", default='',
                         help="Estimated genome size(MB) eg. 3.2M, If blank will AUTODETECT. default: ''")
     parser.add_argument("--threads", default=8, type=int, help="Number of threads to use. default: 8")
+    parser.add_argument("--check", action='store_true', help="Check format of sra.")
     args = parser.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
+    reads = os.path.join(args.outdir, 'READS.sra')
+    os.symlink(args.sra, reads)
     logfile = os.path.join(args.outdir, 'runner.log')
     logging.basicConfig(
         filename=logfile,
@@ -80,44 +76,44 @@ def main():
         format='[%(levelname)s] %(asctime)s %(message)s',
         datefmt="%Y-%m-%d %H:%M:%S"
     )
-
-    try:
-        sra = SequenceReadArchive(args.accession)
-    except Exception as e:
-        logging.debug(e)
-        sys.exit()
-    if sra.layout != '2':
-        logging.debug("Layout is not pair-end")
-        sys.exit("Aborted")
-    if sra.high_qulity_bases_percent() < 80:
-        logging.debug("q30 bases < 80%%")
-        sys.exit("Aborted")
+    if args.check:
+        try:
+            sra = SequenceReadArchive(reads)
+        except ApplicationError as exception:
+            logging.debug(exception)
+            sys.exit()
+        if sra.layout != '2':
+            logging.debug("Layout is not pair-end")
+            sys.exit("Aborted")
+        if sra.count_bases(30)/sra.count_bases()*100 < 80:
+            logging.debug("q30 bases < 80%%")
+            sys.exit("Aborted")
     fastq_dirname = os.path.join(args.outdir, 'fastq')
     logging.info("Dump fastq from SRA")
     try:
-        download_and_dump_fastq(args.accession, fastq_dirname)
-    except CalledProcessError:
-        logging.debug("Dump fastq fail")
+        dump_fastq(reads, fastq_dirname)
+    except ApplicationError as exception:
+        logging.debug(exception)
         sys.exit("Aborted!")
-    reads_1 = os.path.join(fastq_dirname, f'{args.accession}_1.fastq')
-    reads_2 = os.path.join(fastq_dirname, f'{args.accession}_2.fastq')
-    trim_reads_1 = os.path.join(fastq_dirname, 'R1.fastq')
-    trim_reads_2 = os.path.join(fastq_dirname, 'R2.fastq')
+    raw_1 = os.path.join(fastq_dirname, 'READS_1.fastq')
+    raw_2 = os.path.join(fastq_dirname, 'READS_2.fastq')
+    paired_1 = os.path.join(fastq_dirname, 'R1.fastq.gz')
+    paired_2 = os.path.join(fastq_dirname, 'R2.fastq.gz')
     logging.info('reads trimming')
     try:
-        trimming(reads_1, reads_2, trim_reads_1, trim_reads_2, args.threads)
-    except CalledProcessError:
-        logging.debug("reads trimming fail")
+        trimming(raw_1, raw_2, paired_1, paired_2, args.threads)
+    except ApplicationError as exception:
+        logging.debug(exception)
         sys.exit("Aborted!")
     logging.info("assembly with shovill")
-    cmd = f"shovill --R1 {trim_reads_1} --R2 {trim_reads_2} --outdir {args.outdir} --depth 80 --tmpdir {args.tmpdir} " \
+    cmd = f"shovill --R1 {paired_1} --R2 {paired_2} --outdir {args.outdir} --depth 80 --tmpdir {args.tmpdir} " \
           f"--cpus {args.threads} --force --noreadcorr --nostitch"
     if args.gsize:
         cmd += f" --gsize {args.gsize}"
     try:
         run_cmd(cmd)
-    except CalledProcessError:
-        logging.debug("assembly fail")
+    except ApplicationError as exception:
+        logging.debug(exception)
         sys.exit("Aborted!")
     shutil.rmtree(fastq_dirname)
     logging.info("Done")
